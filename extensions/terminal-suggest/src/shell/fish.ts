@@ -5,40 +5,87 @@
 
 import * as vscode from 'vscode';
 import type { ICompletionResource } from '../types';
-import { execHelper, spawnHelper } from './common';
+import { getAliasesHelper } from './common';
 import { type ExecOptionsWithStringEncoding } from 'node:child_process';
+import { fishBuiltinsCommandDescriptionsCache } from './fishBuiltinsCache';
+
+const commandDescriptionsCache: Map<string, { shortDescription?: string; description: string; args: string | undefined }> | undefined = parseCache(fishBuiltinsCommandDescriptionsCache);
 
 export async function getFishGlobals(options: ExecOptionsWithStringEncoding, existingCommands?: Set<string>): Promise<(string | ICompletionResource)[]> {
 	return [
 		...await getAliases(options),
-		...await getBuiltins(options, existingCommands),
+		...await getBuiltins(options),
 	];
 }
 
-async function getBuiltins(options: ExecOptionsWithStringEncoding, existingCommands?: Set<string>): Promise<string[]> {
-	const compgenOutput = await execHelper('functions -n', options);
-	const filter = (cmd: string) => cmd && !existingCommands?.has(cmd);
-	return compgenOutput.split(', ').filter(filter);
+async function getBuiltins(options: ExecOptionsWithStringEncoding): Promise<(string | ICompletionResource)[]> {
+	const completions: ICompletionResource[] = [];
+
+	// Use the cache directly for all commands
+	for (const cmd of [...commandDescriptionsCache!.keys()]) {
+		try {
+			const result = getCommandDescription(cmd);
+			if (result) {
+				completions.push({
+					label: { label: cmd, description: result.description },
+					detail: result.args,
+					documentation: new vscode.MarkdownString(result.documentation),
+					kind: vscode.TerminalCompletionItemKind.Method
+				});
+			} else {
+				console.warn(`Fish command "${cmd}" not found in cache.`);
+				completions.push({
+					label: cmd,
+					kind: vscode.TerminalCompletionItemKind.Method
+				});
+			}
+		} catch (e) {
+			// Ignore errors
+			completions.push({
+				label: cmd,
+				kind: vscode.TerminalCompletionItemKind.Method
+			});
+		}
+	}
+
+	return completions;
+}
+
+export function getCommandDescription(command: string): { documentation?: string; description?: string; args?: string | undefined } | undefined {
+	if (!commandDescriptionsCache) {
+		return undefined;
+	}
+	const result = commandDescriptionsCache.get(command);
+	if (!result) {
+		return undefined;
+	}
+
+	if (result.shortDescription) {
+		return {
+			description: result.shortDescription,
+			args: result.args,
+			documentation: result.description
+		};
+	} else {
+		return {
+			description: result.description,
+			args: result.args,
+			documentation: result.description
+		};
+	}
+}
+
+function parseCache(cache: Object): Map<string, { shortDescription?: string; description: string; args: string | undefined }> | undefined {
+	if (!cache) {
+		return undefined;
+	}
+	const result = new Map<string, { shortDescription?: string; description: string; args: string | undefined }>();
+	for (const [key, value] of Object.entries(cache)) {
+		result.set(key, value);
+	}
+	return result;
 }
 
 async function getAliases(options: ExecOptionsWithStringEncoding): Promise<ICompletionResource[]> {
-	// This must be run with interactive, otherwise there's a good chance aliases won't
-	// be set up. Note that this could differ from the actual aliases as it's a new bash
-	// session, for the same reason this would not include aliases that are created
-	// by simply running `alias ...` in the terminal.
-	const aliasOutput = await spawnHelper('fish', ['-ic', 'alias'], options);
-
-	const result: ICompletionResource[] = [];
-	for (const line of aliasOutput.split('\n')) {
-		const match = line.match(/^alias (?<alias>[a-zA-Z0-9\.:-]+) (?<resolved>.+)$/);
-		if (!match?.groups) {
-			continue;
-		}
-		result.push({
-			label: match.groups.alias,
-			detail: match.groups.resolved,
-			kind: vscode.TerminalCompletionItemKind.Alias,
-		});
-	}
-	return result;
+	return getAliasesHelper('fish', ['-ic', 'alias'], /^alias (?<alias>[a-zA-Z0-9\.:-]+) (?<resolved>.+)$/, options);
 }

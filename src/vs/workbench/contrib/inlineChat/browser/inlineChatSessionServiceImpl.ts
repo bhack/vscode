@@ -20,7 +20,7 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { DEFAULT_EDITOR_ASSOCIATION } from '../../../common/editor.js';
-import { ChatAgentLocation, IChatAgentService } from '../../chat/common/chatAgents.js';
+import { IChatAgentService } from '../../chat/common/chatAgents.js';
 import { IChatService } from '../../chat/common/chatService.js';
 import { CTX_INLINE_CHAT_HAS_AGENT, CTX_INLINE_CHAT_HAS_AGENT2, CTX_INLINE_CHAT_POSSIBLE } from '../common/inlineChat.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
@@ -34,6 +34,8 @@ import { IChatEditingService, WorkingSetEntryState } from '../../chat/common/cha
 import { assertType } from '../../../../base/common/types.js';
 import { autorun } from '../../../../base/common/observable.js';
 import { ResourceMap } from '../../../../base/common/map.js';
+import { IChatWidgetService } from '../../chat/browser/chat.js';
+import { ChatAgentLocation } from '../../chat/common/constants.js';
 
 
 type SessionData = {
@@ -85,6 +87,7 @@ export class InlineChatSessionServiceImpl implements IInlineChatSessionService {
 		@IChatService private readonly _chatService: IChatService,
 		@IChatAgentService private readonly _chatAgentService: IChatAgentService,
 		@IChatEditingService private readonly _chatEditingService: IChatEditingService,
+		@IChatWidgetService private readonly _chatWidgetService: IChatWidgetService,
 	) { }
 
 	dispose() {
@@ -162,7 +165,7 @@ export class InlineChatSessionServiceImpl implements IInlineChatSessionService {
 		}));
 
 		store.add(this._chatAgentService.onDidChangeAgents(e => {
-			if (e === undefined && (!this._chatAgentService.getAgent(agent.id) || !this._chatAgentService.getActivatedAgents().includes(agent))) {
+			if (e === undefined && (!this._chatAgentService.getAgent(agent.id) || !this._chatAgentService.getActivatedAgents().map(agent => agent.id).includes(agent.id))) {
 				this._logService.trace(`[IE] provider GONE for ${editor.getId()}, ${agent.extensionId}`);
 				this._releaseSession(session, true);
 			}
@@ -337,11 +340,13 @@ export class InlineChatSessionServiceImpl implements IInlineChatSessionService {
 
 		const chatModel = this._chatService.startSession(ChatAgentLocation.EditingSession, token);
 
-		const editingSession = await this._chatEditingService.createAdhocEditingSession(chatModel.sessionId);
-		editingSession.addFileToWorkingSet(uri);
+		const editingSession = await this._chatEditingService.createEditingSession(chatModel.sessionId);
+		const widget = this._chatWidgetService.getWidgetBySessionId(chatModel.sessionId);
+		widget?.attachmentModel.addFile(uri);
 
 		const store = new DisposableStore();
 		store.add(toDisposable(() => {
+			this._chatService.cancelCurrentRequestForSession(chatModel.sessionId);
 			editingSession.reject();
 			this._sessions2.delete(uri);
 			this._onDidChangeSessions.fire(this);
@@ -350,9 +355,18 @@ export class InlineChatSessionServiceImpl implements IInlineChatSessionService {
 		store.add(chatModel);
 
 		store.add(autorun(r => {
-			const entry = editingSession.readEntry(uri, r);
-			const state = entry?.state.read(r);
-			if (state === WorkingSetEntryState.Accepted || state === WorkingSetEntryState.Rejected) {
+
+			const entries = editingSession.entries.read(r);
+			if (entries.length === 0) {
+				return;
+			}
+
+			const allSettled = entries.every(entry => {
+				const state = entry.state.read(r);
+				return state === WorkingSetEntryState.Accepted || state === WorkingSetEntryState.Rejected;
+			});
+
+			if (allSettled) {
 				// self terminate
 				store.dispose();
 			}
@@ -396,10 +410,10 @@ export class InlineChatEnabler {
 
 		const updateAgent = () => {
 			const agent = chatAgentService.getDefaultAgent(ChatAgentLocation.Editor);
-			if (agent?.locations.length === 1) {
+			if (agent?.id === 'github.copilot.editor' || agent?.id === 'setup.editor') {
 				this._ctxHasProvider.set(true);
 				this._ctxHasProvider2.reset();
-			} else if (agent?.locations.includes(ChatAgentLocation.EditingSession)) {
+			} else if (agent?.id === 'github.copilot.editingSessionEditor') {
 				this._ctxHasProvider.reset();
 				this._ctxHasProvider2.set(true);
 			} else {
