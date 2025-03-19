@@ -107,7 +107,7 @@ EOF
 		else
 			echo "### THIS FILE IS AUTOMATICALLY CONFIGURED ###
 # You may comment out this entry, but any other modifications may be lost.
-deb [arch=amd64,arm64,armhf signed-by=$CODE_TRUSTED_PART] https://packages.microsoft.com/repos/code stable main" > $CODE_SOURCE_PART
+deb [arch=amd64,arm64,armhf] https://packages.microsoft.com/repos/code stable main" > $CODE_SOURCE_PART
 		fi
 
 		# Sourced from https://packages.microsoft.com/keys/microsoft.asc
@@ -134,12 +134,7 @@ NdCFTW7wY0Fb1fWJ+/KTsC4=
 " | gpg --dearmor > $CODE_TRUSTED_PART
 		fi
 
-		if [ -f /etc/apt/trusted.gpg.d/microsoft.gpg ]; then
-			mv /etc/apt/trusted.gpg.d/microsoft.gpg /usr/share/keyrings/microsoft.gpg
-		fi
-
-		if [ -f /etc/apt/trusted.gpg.d/microsoft.gpg ]; then
-			rm /etc/apt/trusted.gpg.d/microsoft.gpg
-		fi
+		# Delete the key at the old location
+		rm -f /etc/apt/trusted.gpg.d/microsoft.gpg
 	fi
 fi
